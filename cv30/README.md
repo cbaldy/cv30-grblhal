@@ -120,16 +120,18 @@ v3; the page itself lives on the microSD card:
 - **Status LED**: steady when idle, slowly fading in and out while moving,
   slow blink when paused, fast blink in alarm.
 
-### Motion/tilt guard (CR-Laser Falcon)
+### Motion/tilt guard
 
-The CR-Laser Falcon's controller is the same CV-30 board plus an MC3416
-accelerometer. If the firmware finds that sensor at start-up, it watches it
+The CR-Laser Falcon's controller is the same CV-30 board with an MC3416
+accelerometer, and at least some CV-30 boxes sold with the laser modules
+have it fitted too. If the firmware finds that sensor at start-up, it watches it
 like Creality's firmware does: when the machine is knocked, lifted or tipped
 by more than 4.5 degrees while a job runs, the job is paused (feed hold, the
 laser goes off) with a long beep. Check the cause, then resume (front button
 or cycle start). `$CVTILT` shows the sensor's state and current tilt;
 `$CVTILT=0` turns the guard off and `$CVTILT=1` back on. Boxes without the
-sensor are unaffected. **Not yet tested on a real Falcon.**
+sensor are unaffected. Tested on a CV-30 box that has the sensor (a knock
+mid-job paused it; normal motion did not); **not yet tested on a Falcon.**
 
 ### LightBurn
 
@@ -194,7 +196,8 @@ To come back to grblHAL from stock, give the stock updater a
 - **LightBurn burns much lighter than expected:** check its speed units
   (mm/min vs mm/s) and that S-value max is 1000.
 - **Can't connect over telnet:** another client (often LightBurn) already has
-  the connection.
+  the connection. A client that vanished without disconnecting (unplugged,
+  reset) is dropped automatically after about 16 seconds.
 - **`$F` error 62 after swapping the card:** send `$FU` then `$FM` to
   remount it (`$UPDATE` does this itself).
 
