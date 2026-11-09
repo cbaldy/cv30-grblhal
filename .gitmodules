@@ -15,7 +15,8 @@
 	url = https://github.com/grblHAL/Plugin_networking
 [submodule "main/sdcard"]
 	path = main/sdcard
-	url = https://github.com/grblHAL/Plugin_SD_card
+	url = https://github.com/cbaldy/Plugin_SD_card
+	branch = fatfs-r015
 [submodule "main/spindle"]
 	path = main/spindle
 	url = https://github.com/grblHAL/Plugins_spindle
