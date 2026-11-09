@@ -61,6 +61,9 @@
 #include "soc/rmt_struct.h"
 #include "soc/system_reg.h"
 #include "driver/gpio.h"
+#include "driver/i2c.h"
+#include "grbl/state_machine.h"
+#include <math.h>
 
 #if SDCARD_ENABLE
 #include "sdcard/sdcard.h"
@@ -619,6 +622,175 @@ static void io_init (void)
     beep(beep_ready);
 }
 
+// --- Motion/tilt guard (CR-Laser Falcon) ------------------------------------
+//
+// The Falcon's CV-30 board adds an MC3416 accelerometer (I2C, GPIO10/11,
+// address 0x4C). Creality's firmware sets it up as below, works out three
+// tilt angles and pauses the job, with the laser off, when any of them moves
+// more than 4.5 degrees: the machine was knocked, lifted or tipped over.
+// Same here: if the sensor answers at start-up, a running job (Cycle) is
+// put in feed hold when the tilt changes by more than CV30_TILT_DEG from
+// where it was when the job started or was last resumed. Laser mode turns
+// the laser off during a feed hold. Boxes without the sensor are unaffected.
+
+#define CV30_I2C_PORT           I2C_NUM_1
+#define CV30_I2C_SDA            GPIO_NUM_10
+#define CV30_I2C_SCL            GPIO_NUM_11
+#define MC3416_ADDR             0x4C
+#define MC3416_XOUT_L           0x0D
+#define CV30_TILT_DEG           4.5f
+#define CV30_TILT_SAMPLES       3               // consecutive readings over the limit
+#define CV30_TILT_PERIOD_MS     50
+#define CV30_NVS_TILT           "tilt_off"
+
+static bool tilt_present, tilt_enabled = true, tilt_tripped;
+static float tilt_ref[3], tilt_now[3];
+
+static esp_err_t mc3416_write (uint8_t reg, uint8_t value)
+{
+    uint8_t buf[2] = { reg, value };
+
+    return i2c_master_write_to_device(CV30_I2C_PORT, MC3416_ADDR, buf, 2, pdMS_TO_TICKS(20));
+}
+
+static bool mc3416_angles (float angle[3])
+{
+    uint8_t reg = MC3416_XOUT_L, raw[6];
+
+    if(i2c_master_write_read_device(CV30_I2C_PORT, MC3416_ADDR, &reg, 1, raw, 6, pdMS_TO_TICKS(20)) != ESP_OK)
+        return false;
+
+    float x = (int16_t)(raw[0] | (raw[1] << 8)), y = (int16_t)(raw[2] | (raw[3] << 8)), z = (int16_t)(raw[4] | (raw[5] << 8));
+
+    // Angle of each axis against the horizontal plane, in degrees.
+    angle[0] = atan2f(x, sqrtf(y * y + z * z)) * 57.29578f;
+    angle[1] = atan2f(y, sqrtf(x * x + z * z)) * 57.29578f;
+    angle[2] = atan2f(z, sqrtf(x * x + y * y)) * 57.29578f;
+
+    return true;
+}
+
+static bool mc3416_init (void)
+{
+    i2c_config_t cfg = {
+        .mode = I2C_MODE_MASTER,
+        .sda_io_num = CV30_I2C_SDA,
+        .scl_io_num = CV30_I2C_SCL,
+        .sda_pullup_en = GPIO_PULLUP_ENABLE,
+        .scl_pullup_en = GPIO_PULLUP_ENABLE,
+        .master.clk_speed = 100000
+    };
+
+    if(i2c_param_config(CV30_I2C_PORT, &cfg) != ESP_OK || i2c_driver_install(CV30_I2C_PORT, I2C_MODE_MASTER, 0, 0, 0) != ESP_OK)
+        return false;
+
+    // Register setup copied from Creality's Falcon firmware: standby, range,
+    // sample rate, motion thresholds and debounce, interrupt and motion
+    // control, then wake.
+    static const uint8_t setup[][2] = {
+        { 0x07, 0x03 }, { 0x20, 0x19 }, { 0x08, 0x05 },
+        { 0x40, 0x50 }, { 0x41, 0x00 }, { 0x42, 0x01 }, { 0x43, 0x10 }, { 0x44, 0x00 },
+        { 0x45, 0x01 }, { 0x46, 0x88 }, { 0x47, 0x00 }, { 0x48, 0x10 }, { 0x49, 0x10 },
+        { 0x06, 0x04 }, { 0x09, 0x04 }, { 0x07, 0x41 }
+    };
+
+    for(uint_fast8_t i = 0; i < sizeof(setup) / sizeof(setup[0]); i++) {
+        if(mc3416_write(setup[i][0], setup[i][1]) != ESP_OK) {
+            i2c_driver_delete(CV30_I2C_PORT);
+            gpio_reset_pin(CV30_I2C_SDA);
+            gpio_reset_pin(CV30_I2C_SCL);
+            return false;
+        }
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(20));
+
+    return mc3416_angles(tilt_ref);
+}
+
+static void tilt_task (void *arg)
+{
+    uint_fast8_t over = 0;
+    bool was_running = false;
+
+    while(true) {
+
+        vTaskDelay(pdMS_TO_TICKS(CV30_TILT_PERIOD_MS));
+
+        if(!mc3416_angles(tilt_now))
+            continue;
+
+        bool running = (state_get() & STATE_CYCLE) && tilt_enabled;
+
+        if(!running) {
+            // Not lasering: keep following the machine's position, so the
+            // reference is wherever it stood when the job started or resumed.
+            memcpy(tilt_ref, tilt_now, sizeof(tilt_ref));
+            over = 0;
+            if(state_get() == STATE_IDLE)
+                tilt_tripped = false;
+        } else {
+            if(!was_running)
+                memcpy(tilt_ref, tilt_now, sizeof(tilt_ref));
+
+            bool moved = false;
+            for(uint_fast8_t i = 0; i < 3; i++)
+                moved |= fabsf(tilt_now[i] - tilt_ref[i]) > CV30_TILT_DEG;
+
+            if(moved && ++over >= CV30_TILT_SAMPLES) {
+                over = 0;
+                tilt_tripped = true;
+                grbl.enqueue_realtime_command(CMD_FEED_HOLD);
+                beep(beep_alarm);
+            } else if(!moved)
+                over = 0;
+        }
+        was_running = running;
+    }
+}
+
+static void tilt_init (void)
+{
+    nvs_handle_t nvs;
+    uint8_t off = 0;
+
+    if(nvs_open(CV30_NVS_NAMESPACE, NVS_READONLY, &nvs) == ESP_OK) {
+        nvs_get_u8(nvs, CV30_NVS_TILT, &off);
+        nvs_close(nvs);
+    }
+    tilt_enabled = !off;
+
+    if((tilt_present = mc3416_init()))
+        xTaskCreatePinnedToCore(tilt_task, "cv30_tilt", 3072, NULL, 2, NULL, 0);
+}
+
+// $CVTILT: show the motion sensor; $CVTILT=0 / =1 turns the guard off / on.
+static status_code_t cmd_cvtilt (sys_state_t state, char *args)
+{
+    char msg[120];
+
+    if(args && (*args == '0' || *args == '1')) {
+        nvs_handle_t nvs;
+        tilt_enabled = *args == '1';
+        if(nvs_open(CV30_NVS_NAMESPACE, NVS_READWRITE, &nvs) == ESP_OK) {
+            nvs_set_u8(nvs, CV30_NVS_TILT, !tilt_enabled);
+            nvs_commit(nvs);
+            nvs_close(nvs);
+        }
+    } else if(args)
+        return Status_InvalidStatement;
+
+    if(!tilt_present)
+        snprintf(msg, sizeof(msg), "[MSG:CVTILT: no motion sensor (CV-30 box without MC3416)]" ASCII_EOL);
+    else
+        snprintf(msg, sizeof(msg), "[MSG:CVTILT: %s, limit %.1f deg, tilt %.1f %.1f %.1f%s]" ASCII_EOL,
+                 tilt_enabled ? "on" : "OFF", CV30_TILT_DEG, tilt_now[0], tilt_now[1], tilt_now[2],
+                 tilt_tripped ? ", tripped" : "");
+    hal.stream.write(msg);
+
+    return Status_OK;
+}
+
 #ifndef CV30_BUILD
 #define CV30_BUILD "dev"
 #endif
@@ -635,6 +807,7 @@ void my_plugin_init (void)
         { "CVDIAG", cmd_cvdiag, { .allow_blocking = On, .noargs = On }, { .str = "CV-30: show step pin / RMT setup" } },
 #endif
         { "CVSTEP", cmd_cvstep, { .allow_blocking = On }, { .str = "CV-30 motor wiring test: step X or Y directly, e.g. $CVSTEP=X400 or $CVSTEP=Y400-" } },
+        { "CVTILT", cmd_cvtilt, { .allow_blocking = On }, { .str = "Falcon motion/tilt guard: show it, $CVTILT=0 off, $CVTILT=1 on" } },
 #if SDCARD_ENABLE
         { "UPDATE", cmd_update, { .allow_blocking = On }, { .str = "install a CV-30-*.bin from the microSD card via the stock installer" } }
 #endif
@@ -648,6 +821,7 @@ void my_plugin_init (void)
     system_register_commands(&commands);
 
     io_init();
+    tilt_init();
 }
 
 #endif // BOARD_CV30

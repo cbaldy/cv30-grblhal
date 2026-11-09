@@ -317,7 +317,7 @@ if(BOARD_CV30 AND "${target}" STREQUAL "esp32s2")
 # laser's 24 V through Q1), homing is X+Y in one cycle (no Z) and homing sets
 # the machine origin to 0,0.
 target_compile_definitions("${COMPONENT_LIB}" PUBLIC BOARD_CV30)
-target_compile_definitions("${COMPONENT_LIB}" PUBLIC CV30_BUILD="10") # shown in $I [BOARD:...]; bump for every CV-30-grblhal-N.bin
+target_compile_definitions("${COMPONENT_LIB}" PUBLIC CV30_BUILD="11") # shown in $I [BOARD:...]; bump for every CV-30-grblhal-N.bin
 target_compile_definitions("${COMPONENT_LIB}" PUBLIC PROBE_ENABLE=0) # no probe input on this board
 # Networking: Wi-Fi (station + setup access point), telnet for LightBurn,
 # websocket, HTTP + WebDAV and FTP for file upload to the microSD card.

@@ -120,6 +120,17 @@ v3; the page itself lives on the microSD card:
 - **Status LED**: steady when idle, slowly fading in and out while moving,
   slow blink when paused, fast blink in alarm.
 
+### Motion/tilt guard (CR-Laser Falcon)
+
+The CR-Laser Falcon's controller is the same CV-30 board plus an MC3416
+accelerometer. If the firmware finds that sensor at start-up, it watches it
+like Creality's firmware does: when the machine is knocked, lifted or tipped
+by more than 4.5 degrees while a job runs, the job is paused (feed hold, the
+laser goes off) with a long beep. Check the cause, then resume (front button
+or cycle start). `$CVTILT` shows the sensor's state and current tilt;
+`$CVTILT=0` turns the guard off and `$CVTILT=1` back on. Boxes without the
+sensor are unaffected. **Not yet tested on a real Falcon.**
+
 ### LightBurn
 
 Add a **GRBL** device:
