@@ -317,12 +317,12 @@ if(BOARD_CV30 AND "${target}" STREQUAL "esp32s2")
 # laser's 24 V through Q1), homing is X+Y in one cycle (no Z) and homing sets
 # the machine origin to 0,0.
 target_compile_definitions("${COMPONENT_LIB}" PUBLIC BOARD_CV30)
-target_compile_definitions("${COMPONENT_LIB}" PUBLIC CV30_BUILD="9") # shown in $I [BOARD:...]; bump for every CV-30-grblhal-N.bin
+target_compile_definitions("${COMPONENT_LIB}" PUBLIC CV30_BUILD="10") # shown in $I [BOARD:...]; bump for every CV-30-grblhal-N.bin
 target_compile_definitions("${COMPONENT_LIB}" PUBLIC PROBE_ENABLE=0) # no probe input on this board
 # Networking: Wi-Fi (station + setup access point), telnet for LightBurn,
 # websocket, HTTP + WebDAV and FTP for file upload to the microSD card.
-# The ESP3D WebUI is left out for now (size; uploads go to the SD card and
-# $UPDATE hands them to the stock installer, see cv30.c).
+# ESP3D-WebUI v3 backend; the UI itself (index.html.gz) is served from the
+# SD card's /www folder.
 target_compile_definitions("${COMPONENT_LIB}" PUBLIC WIFI_ENABLE=1)
 target_compile_definitions("${COMPONENT_LIB}" PUBLIC WIFI_SOFTAP=1)
 target_compile_definitions("${COMPONENT_LIB}" PUBLIC WEBSOCKET_ENABLE=1)
@@ -330,6 +330,7 @@ target_compile_definitions("${COMPONENT_LIB}" PUBLIC HTTP_ENABLE=1)
 target_compile_definitions("${COMPONENT_LIB}" PUBLIC WEBDAV_ENABLE=1)
 target_compile_definitions("${COMPONENT_LIB}" PUBLIC SDCARD_ENABLE=1)
 target_compile_definitions("${COMPONENT_LIB}" PUBLIC MDNS_ENABLE=1) # cv30-laser.local
+target_compile_definitions("${COMPONENT_LIB}" PUBLIC WEBUI_ENABLE=3) # ESP3D-WebUI v3, index.html.gz in /www on the SD card
 target_compile_definitions("${COMPONENT_LIB}" PUBLIC NETWORK_STA_HOSTNAME="cv30-laser")
 target_compile_definitions("${COMPONENT_LIB}" PUBLIC NETWORK_AP_SSID="CV30-Laser-Setup")
 target_compile_definitions("${COMPONENT_LIB}" PUBLIC NETWORK_AP_HOSTNAME="cv30-laser")

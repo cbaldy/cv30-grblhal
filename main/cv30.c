@@ -434,6 +434,191 @@ static status_code_t cmd_cvstep (sys_state_t state, char *args)
     return Status_OK;
 }
 
+// --- Front button, buzzer and status LED -----------------------------------
+
+#define CV30_BUTTON_PIN         GPIO_NUM_33     // to ground, pull-up
+#define CV30_BUZZER_PIN         GPIO_NUM_9
+#define CV30_LED_PIN            GPIO_NUM_34
+#define CV30_BUTTON_DEBOUNCE_US 30000
+#define CV30_BUTTON_LONG_US     1500000         // long press = stop (soft reset)
+#define CV30_BUZZER_HZ          2700
+#define CV30_LED_TICK_MS        50
+
+static on_execute_realtime_ptr on_execute_realtime;
+static on_program_completed_ptr on_program_completed;
+static on_state_change_ptr on_state_change;
+static esp_timer_handle_t beep_timer, led_timer;
+static const uint16_t *beep_pattern;            // on/off times in ms, 0 terminated
+static volatile sys_state_t led_state = STATE_IDLE;
+
+static const uint16_t beep_ready[] = { 80, 0 };
+static const uint16_t beep_done[] = { 120, 120, 120, 0 };
+static const uint16_t beep_alarm[] = { 600, 0 };
+static const uint16_t beep_click[] = { 30, 0 };
+
+static void buzzer (bool on)
+{
+    ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_2, on ? 512 : 0);
+    ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_2);
+}
+
+// Steps through beep_pattern: even entries sound, odd entries are gaps.
+static void beep_step (void *arg)
+{
+    static uint_fast8_t idx;
+
+    if(arg)
+        idx = 0;
+
+    uint16_t ms = beep_pattern ? beep_pattern[idx] : 0;
+
+    buzzer(ms && !(idx & 1));
+    if(ms) {
+        idx++;
+        esp_timer_start_once(beep_timer, ms * 1000);
+    } else
+        beep_pattern = NULL;
+}
+
+static void beep (const uint16_t *pattern)
+{
+    esp_timer_stop(beep_timer);
+    beep_pattern = pattern;
+    beep_step((void *)1);
+}
+
+// Idle: steady; running/jogging/homing: breathing; hold or door: slow blink;
+// alarm/E-stop: fast blink.
+static void led_tick (void *arg)
+{
+    static uint32_t tick;
+    uint32_t duty;
+    sys_state_t state = led_state;
+
+    tick++;
+    if(state & (STATE_ALARM|STATE_ESTOP))
+        duty = (tick & 2) ? 1023 : 0;
+    else if(state & (STATE_HOLD|STATE_SAFETY_DOOR|STATE_TOOL_CHANGE))
+        duty = (tick & 16) ? 1023 : 0;
+    else if(state & (STATE_CYCLE|STATE_JOG|STATE_HOMING)) {
+        uint32_t phase = tick % 40;
+        duty = (phase < 20 ? phase : 40 - phase) * 1023 / 20;
+    } else
+        duty = 300;
+
+    ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_3, duty);
+    ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_3);
+}
+
+// Short press: pause a running job or jog (feed hold), or resume a paused
+// one (cycle start). Long press: stop (soft reset, laser off).
+static void button_poll (sys_state_t state)
+{
+    static bool pressed, long_sent;
+    static int64_t changed;
+    int64_t now = esp_timer_get_time();
+    bool down = gpio_get_level(CV30_BUTTON_PIN) == 0;
+
+    if(down != pressed && now - changed > CV30_BUTTON_DEBOUNCE_US) {
+        pressed = down;
+        changed = now;
+        if(!pressed && !long_sent) {
+            if(state & (STATE_CYCLE|STATE_JOG|STATE_HOMING))
+                grbl.enqueue_realtime_command(CMD_FEED_HOLD);
+            else if(state & STATE_HOLD)
+                grbl.enqueue_realtime_command(CMD_CYCLE_START);
+            beep(beep_click);
+        }
+        long_sent = false;
+    } else if(pressed && !long_sent && now - changed > CV30_BUTTON_LONG_US) {
+        long_sent = true;
+        grbl.enqueue_realtime_command(CMD_RESET);
+        beep(beep_alarm);
+    }
+}
+
+static void cv30_execute_realtime (sys_state_t state)
+{
+    button_poll(state);
+    on_execute_realtime(state);
+}
+
+static void cv30_program_completed (program_flow_t program_flow, bool check_mode)
+{
+    if(!check_mode)
+        beep(beep_done);
+    if(on_program_completed)
+        on_program_completed(program_flow, check_mode);
+}
+
+static void cv30_state_change (sys_state_t state)
+{
+    if((state & (STATE_ALARM|STATE_ESTOP)) && !(led_state & (STATE_ALARM|STATE_ESTOP)))
+        beep(beep_alarm);
+    led_state = state;
+    if(on_state_change)
+        on_state_change(state);
+}
+
+static void io_init (void)
+{
+    gpio_config_t button = {
+        .pin_bit_mask = 1ULL << CV30_BUTTON_PIN,
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_ENABLE
+    };
+    gpio_config(&button);
+
+    ledc_timer_config_t buzzer_timer = {
+        .speed_mode = LEDC_LOW_SPEED_MODE,
+        .duty_resolution = LEDC_TIMER_10_BIT,
+        .timer_num = LEDC_TIMER_2,
+        .freq_hz = CV30_BUZZER_HZ,
+        .clk_cfg = LEDC_AUTO_CLK
+    };
+    ledc_timer_config(&buzzer_timer);
+    ledc_channel_config_t buzzer_channel = {
+        .gpio_num = CV30_BUZZER_PIN,
+        .speed_mode = LEDC_LOW_SPEED_MODE,
+        .channel = LEDC_CHANNEL_2,
+        .timer_sel = LEDC_TIMER_2,
+        .duty = 0
+    };
+    ledc_channel_config(&buzzer_channel);
+
+    ledc_timer_config_t led_timer_cfg = {
+        .speed_mode = LEDC_LOW_SPEED_MODE,
+        .duty_resolution = LEDC_TIMER_10_BIT,
+        .timer_num = LEDC_TIMER_3,
+        .freq_hz = 5000,
+        .clk_cfg = LEDC_AUTO_CLK
+    };
+    ledc_timer_config(&led_timer_cfg);
+    ledc_channel_config_t led_channel = {
+        .gpio_num = CV30_LED_PIN,
+        .speed_mode = LEDC_LOW_SPEED_MODE,
+        .channel = LEDC_CHANNEL_3,
+        .timer_sel = LEDC_TIMER_3,
+        .duty = 0
+    };
+    ledc_channel_config(&led_channel);
+
+    const esp_timer_create_args_t beep_args = { .callback = beep_step, .name = "cv30_beep" };
+    esp_timer_create(&beep_args, &beep_timer);
+    const esp_timer_create_args_t led_args = { .callback = led_tick, .name = "cv30_led" };
+    esp_timer_create(&led_args, &led_timer);
+    esp_timer_start_periodic(led_timer, CV30_LED_TICK_MS * 1000);
+
+    on_execute_realtime = grbl.on_execute_realtime;
+    grbl.on_execute_realtime = cv30_execute_realtime;
+    on_program_completed = grbl.on_program_completed;
+    grbl.on_program_completed = cv30_program_completed;
+    on_state_change = grbl.on_state_change;
+    grbl.on_state_change = cv30_state_change;
+
+    beep(beep_ready);
+}
+
 #ifndef CV30_BUILD
 #define CV30_BUILD "dev"
 #endif
@@ -461,6 +646,8 @@ void my_plugin_init (void)
     };
 
     system_register_commands(&commands);
+
+    io_init();
 }
 
 #endif // BOARD_CV30

@@ -8,7 +8,11 @@ It replaces the stock firmware (Grbl_Esp32 1.3a) with a current grblHAL and
 adds:
 
 - **Wi-Fi**: LightBurn and LaserGRBL over the network (telnet, port 23), plus
-  websocket, FTP and WebDAV for putting files on the microSD card.
+  websocket, FTP and WebDAV for moving files to and from the microSD card.
+- **Browser control panel** (ESP3D-WebUI): jog, home, run jobs from the SD
+  card, console and settings from any phone or computer, no software needed.
+- **Front button, buzzer and status LED** put to use: press to pause/resume,
+  hold to stop; beeps for start, job done and alarm; the LED shows the state.
 - **Wireless firmware updates**: upload a new build and install it with
   `$UPDATE`, without opening the box or pressing any buttons.
 - **No tools needed to install**: it goes on through Creality's own microSD
@@ -95,6 +99,27 @@ If you keep the access point, change its password with `$77=<new password>`.
 without echoing it. The box then shows up as `cv30-laser.local` (mDNS) and
 on your router's client list.
 
+### Browser control panel (WebUI)
+
+The firmware includes the backend for [ESP3D-WebUI](https://github.com/luc-github/ESP3D-WEBUI)
+v3; the page itself lives on the microSD card:
+
+1. Download `index.html.gz` from
+   [ESP3D-WEBUI dist/CNC/GRBLHal](https://github.com/luc-github/ESP3D-WEBUI/tree/3.0/dist/CNC/GRBLHal).
+2. Put it in a folder called `www` on the card (copy it there in a card
+   reader, or over FTP/WebDAV).
+3. Open `http://cv30-laser.local/` (or the box's IP) in a browser.
+
+### Front button, buzzer and LED
+
+- **Front button**: a short press pauses a running job or jog (feed hold) and
+  resumes a paused one (cycle start). Holding it for 1.5 s **stops** everything
+  (soft reset: the laser switches off and motion stops).
+- **Buzzer**: one short beep when grblHAL starts, three when a job finishes
+  (`M2`/`M30`), one long beep on an alarm.
+- **Status LED**: steady when idle, slowly fading in and out while moving,
+  slow blink when paused, fast blink in alarm.
+
 ### LightBurn
 
 Add a **GRBL** device:
@@ -106,7 +131,8 @@ Add a **GRBL** device:
 - **S-value max: 1000** (matches `$30`)
 
 Only one telnet client can be connected at a time; close LightBurn before
-using the tools in `tools/` over the network.
+using the tools in `tools/` over the network. Use either LightBurn or the
+WebUI to drive the machine, not both at once.
 
 ## Updating
 
@@ -179,7 +205,7 @@ Bump `CV30_BUILD` in `main/CMakeLists.txt` for every image, so the stock
 updater sees a new name and `$I` shows which build is running.
 
 The CV-30 code is in `main/cv30.c` (boot guard, `$STOCK`, `$UPDATE`,
-`$CVSTEP`) and `main/boards/cv30_map.h`; the board's pins and how they were
+`$CVSTEP`, button, buzzer and LED) and `main/boards/cv30_map.h`; the board's pins and how they were
 found are in [pinmap.md](pinmap.md). This fork also ports the grblHAL ESP32
 driver to ESP-IDF 5 and adds the ESP32-S2.
 

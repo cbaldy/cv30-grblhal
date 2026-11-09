@@ -47,13 +47,11 @@
 #define X_LIMIT_PIN             GPIO_NUM_40
 #define Y_LIMIT_PIN             GPIO_NUM_42
 
-// Laser. The stock firmware writes duty = 1023 - power, i.e. the PWM output
-// is inverted on this board, and drives GPIO38 high to switch the laser off.
-// Both inversions are set as defaults in CMakeLists.txt (BOARD_CV30).
+// Laser. The PWM output is inverted on this board (duty = 1023 - power, as
+// in the stock firmware); GPIO38 is the laser enable, active-high: it
+// switches the laser connector's 24 V through Q1. Defaults in CMakeLists.txt.
 #define AUXOUTPUT0_PIN          GPIO_NUM_37 // Laser PWM
-#define AUXOUTPUT1_PIN          GPIO_NUM_38 // Laser enable (active low)
-#define AUXOUTPUT2_PIN          GPIO_NUM_9  // Buzzer
-#define AUXOUTPUT3_PIN          GPIO_NUM_34 // Status LED
+#define AUXOUTPUT1_PIN          GPIO_NUM_38 // Laser enable
 
 #if DRIVER_SPINDLE_ENABLE & SPINDLE_PWM
 #define SPINDLE_PWM_PIN         AUXOUTPUT0_PIN
@@ -62,8 +60,8 @@
 #define SPINDLE_ENABLE_PIN      AUXOUTPUT1_PIN
 #endif
 
-// Front button (input with pull-up). Free for now: available as an aux input.
-#define AUXINPUT0_PIN           GPIO_NUM_33
+// Front button (GPIO33), buzzer (GPIO9) and status LED (GPIO34) are driven
+// by cv30.c.
 
 #if SDCARD_ENABLE
 #define SPI_MISO_PIN            GPIO_NUM_2
