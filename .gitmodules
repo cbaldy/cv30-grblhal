@@ -12,7 +12,7 @@
 	url = https://github.com/grblHAL/Plugins_motor
 [submodule "main/networking"]
 	path = main/networking
-	url = https://github.com/grblHAL/Plugin_networking
+	url = https://github.com/cbaldy/Plugin_networking
 [submodule "main/sdcard"]
 	path = main/sdcard
 	url = https://github.com/cbaldy/Plugin_SD_card
